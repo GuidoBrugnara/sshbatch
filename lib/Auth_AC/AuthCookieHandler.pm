@@ -40,25 +40,31 @@ sessione non è valida.
 
 =cut
 
+use constant COOKIE_NAME => 'mellon-cookie';
+
 # Validate session key and return username or undef
 sub authen_ses_key {
     my ($self, $r, $session_key) = @_;
     
-    # Get cookie name from Apache config
-    my $cookie_name = $self->cookie_name($r) || 'SessionCookie';
+    # Fetch all cookies from request
+    my %cookies = Apache2::Cookie->fetch($r);
+    
+    # Get mellon-cookie value
+    my $mellon_cookie = $cookies{COOKIE_NAME()};
+    my $cookie_value = $mellon_cookie ? $mellon_cookie->value : undef;
     
     # Validate session (replace with your validation logic)
-    my $user = $self->_validate_session($r, $session_key);
+    my $user = $self->_validate_session($r, $cookie_value || $session_key);
     
     unless ($user) {
-        # Session invalid: delete cookie from browser
-        $self->_expire_cookie($r, $cookie_name);
+        # Session invalid: delete mellon-cookie from browser
+        $self->_expire_cookie($r, COOKIE_NAME);
         
         # Set custom error note to signal 403 should be returned
         $r->notes->set('AuthCookieReason' => 'SessionExpired');
         
         # Log the event
-        $r->log->warn("Session invalid or expired for cookie: $cookie_name");
+        $r->log->warn("Session invalid or expired, deleting cookie: " . COOKIE_NAME);
         
         return undef;
     }
@@ -70,10 +76,13 @@ sub authen_ses_key {
 sub _expire_cookie {
     my ($self, $r, $cookie_name) = @_;
     
-    my $path = $r->dir_config('MyAuthPath') || '/';
-    my $domain = $r->dir_config('MyAuthDomain');
+    $cookie_name ||= COOKIE_NAME;
+    
+    my $path = $r->dir_config('MellonCookiePath') || '/';
+    my $domain = $r->dir_config('MellonCookieDomain');
     
     # Create expired cookie to delete from browser
+    # Setting expires to a past date tells browser to remove it
     my $expired_cookie = Apache2::Cookie->new($r,
         -name    => $cookie_name,
         -value   => '',
@@ -82,10 +91,10 @@ sub _expire_cookie {
         ($domain ? (-domain => $domain) : ()),
     );
     
-    # Send cookie to browser (this will delete it)
+    # bake() adds Set-Cookie header to response
     $expired_cookie->bake($r);
     
-    $r->log->debug("Cookie '$cookie_name' marked for deletion");
+    $r->log->debug("Cookie '$cookie_name' marked for deletion (Set-Cookie with expires in past)");
     
     return;
 }
