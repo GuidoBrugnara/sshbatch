@@ -72,68 +72,29 @@ sub authen_ses_key {
     return $user;
 }
 
-# Debug: log all cookie attributes for diagnosis
-sub _debug_cookie_info {
-    my ($self, $r) = @_;
-    
-    # Log request headers to see what proxy sends
-    my $cookie_header = $r->headers_in->get('Cookie') || 'NO COOKIE HEADER';
-    $r->log->warn("DEBUG - Cookie header from client: $cookie_header");
-    
-    # Log the Host and origin info
-    $r->log->warn("DEBUG - Host: " . ($r->headers_in->get('Host') || 'N/A'));
-    $r->log->warn("DEBUG - X-Forwarded-Host: " . ($r->headers_in->get('X-Forwarded-Host') || 'N/A'));
-    $r->log->warn("DEBUG - X-Forwarded-Proto: " . ($r->headers_in->get('X-Forwarded-Proto') || 'N/A'));
-    
-    # Parse and log individual cookies
-    my %cookies = Apache2::Cookie->fetch($r);
-    for my $name (keys %cookies) {
-        my $c = $cookies{$name};
-        $r->log->warn("DEBUG - Found cookie '$name' = '" . ($c->value || '') . "'");
-    }
-    
-    return;
-}
-
 # Expire/delete the cookie by setting expiration in the past
 sub _expire_cookie {
     my ($self, $r, $cookie_name) = @_;
     
     $cookie_name ||= COOKIE_NAME;
     
-    # Debug: log cookie info before deletion attempt
-    $self->_debug_cookie_info($r);
+    my $path = $r->dir_config('MellonCookiePath') || '/';
+    my $domain = $r->dir_config('MellonCookieDomain');
     
-    # Get cookie attributes - these MUST match the original cookie
-    my $path   = $r->dir_config('MellonCookiePath')   || '/';
-    my $domain = $r->dir_config('MellonCookieDomain') || '';
-    my $secure = $r->dir_config('MellonCookieSecure') || 0;
-    
-    # Build Set-Cookie header manually for more control
-    # This ensures all attributes match the original cookie
-    my $set_cookie = "$cookie_name=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=$path";
-    $set_cookie .= "; domain=$domain" if $domain;
-    $set_cookie .= "; Secure" if $secure;
-    $set_cookie .= "; HttpOnly";
-    $set_cookie .= "; SameSite=Lax";
-    
-    # Add Set-Cookie header directly to err_headers_out
-    # err_headers_out persists even on error responses (like 403)
-    $r->err_headers_out->add('Set-Cookie' => $set_cookie);
-    
-    $r->log->warn("DEBUG - Set-Cookie header added: $set_cookie");
-    
-    # Also try with Apache2::Cookie as backup
+    # Create expired cookie to delete from browser
+    # Setting expires to a past date tells browser to remove it
     my $expired_cookie = Apache2::Cookie->new($r,
         -name    => $cookie_name,
         -value   => '',
-        -expires => '-1d',
+        -expires => '-1d',      # Expired 1 day ago
         -path    => $path,
         ($domain ? (-domain => $domain) : ()),
     );
+    
+    # bake() adds Set-Cookie header to response
     $expired_cookie->bake($r);
     
-    $r->log->warn("Cookie '$cookie_name' deletion attempted");
+    $r->log->debug("Cookie '$cookie_name' marked for deletion (Set-Cookie with expires in past)");
     
     return;
 }
